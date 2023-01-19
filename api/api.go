@@ -1,10 +1,11 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
 	"strings"
 	"tongs/global"
 	"tongs/model"
+
+	"github.com/gin-gonic/gin"
 )
 
 func GetTongs(c *gin.Context) {
@@ -16,7 +17,7 @@ func RunTongs(c *gin.Context) {
 	c.BindJSON(&param)
 	t, err := global.TongsManager.FindTongs(param.Tongs)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 	err = t.Run(strings.Split(param.Url, ",")...)
@@ -32,7 +33,7 @@ func StopTongs(c *gin.Context) {
 	c.BindJSON(&param)
 	t, err := global.TongsManager.FindTongs(param.Tongs)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 	t.Stop()
@@ -43,7 +44,7 @@ func GetTasks(c *gin.Context) {
 	tongs := c.Query("tongs")
 	t, err := global.TongsManager.FindTongs(tongs)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 
@@ -56,7 +57,7 @@ func RunTask(c *gin.Context) {
 
 	t, err := global.TongsManager.FindTongs(param.Tongs)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 	err = t.RunTask(param.Task, param.Url)
@@ -73,7 +74,7 @@ func StopTask(c *gin.Context) {
 
 	t, err := global.TongsManager.FindTongs(param.Tongs)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 	t.StopTask(param.Task)
@@ -83,14 +84,15 @@ func StopTask(c *gin.Context) {
 func AddUrl(c *gin.Context) {
 	var param model.Param
 	c.BindJSON(&param)
-	t, err := global.TongsManager.FindTongs(param.Tongs)
+
+	t, err := global.TongsManager.FindTask(param.Tongs, param.Task)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
-	err = t.AddURL(param.Task, param.Url)
+	err = t.AddURL(param.Url)
 	if err != nil {
-		model.Error(-1, "Tongs不存在", c)
+		model.Error(-1, err.Error(), c)
 		return
 	}
 	model.Ok(c)

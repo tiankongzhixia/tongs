@@ -3,16 +3,17 @@ package tong
 import (
 	"errors"
 	"fmt"
-	"github.com/go-redis/redis"
-	"github.com/gocolly/colly/v2"
-	"github.com/gocolly/colly/v2/queue"
-	"github.com/mozillazg/go-pinyin"
-	"go.uber.org/zap"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"tongs/config"
+
+	"github.com/go-redis/redis"
+	"github.com/gocolly/colly/v2"
+	"github.com/gocolly/colly/v2/queue"
+	"github.com/mozillazg/go-pinyin"
+	"go.uber.org/zap"
 )
 
 var (
@@ -56,12 +57,12 @@ func (m *Manager) AddTongs(name string) *Tongs {
 
 // FindTongs 根据名称查找
 func (m *Manager) FindTongs(name string) (*Tongs, error) {
-	for _, t := range managers {
-		if t.Name == name {
-			return t, nil
-		}
-	}
-	return nil, errors.New("组不存在")
+	return findTongs(name)
+}
+
+// FindTongs 根据名称查找
+func (m *Manager) FindTask(tongsName, taskName string) (*Task, error) {
+	return findTask(tongsName, taskName)
 }
 
 // AddTask 添加任务
@@ -196,6 +197,15 @@ func findTongs(name string) (*Tongs, error) {
 	for _, t := range managers {
 		if t.Name == name {
 			return t, nil
+		}
+	}
+	return nil, errors.New("组不存在")
+}
+
+func findTask(tongsName, taskName string) (*Task, error) {
+	for _, t := range managers {
+		if t.Name == tongsName {
+			return t.findTaskWithName(taskName)
 		}
 	}
 	return nil, errors.New("组不存在")

@@ -2,10 +2,11 @@ package baidu
 
 import (
 	"fmt"
-	"github.com/gocolly/colly/v2"
 	"tongs"
 	"tongs/global"
 	"tongs/tong"
+
+	"github.com/gocolly/colly/v2"
 )
 
 var (

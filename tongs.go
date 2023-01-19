@@ -8,7 +8,6 @@ import (
 type M map[string]interface{}
 
 func Run() {
-	Init()
 	http := initialize.InitRouter()
 	port := global.CONFIG.Server.Port
 	if port == "" {

@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/go-redis/redis"
-	"github.com/gocolly/colly/v2"
-	log "github.com/sirupsen/logrus"
+	"hash/fnv"
+	"io"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/go-redis/redis"
+	"github.com/gocolly/colly/v2"
+	whatwgUrl "github.com/nlnwa/whatwg-url/url"
+	log "github.com/sirupsen/logrus"
 )
 
 type Store interface {
@@ -120,14 +124,16 @@ func (s *BloomStore) AddRequest(r []byte) error {
 	var req colly.Request
 	json.Unmarshal(r, &req)
 	url := req.URL.String()
-	exists, err := s.Client.Do("BF.EXISTS", s.getBloomID(), url).Bool()
-	if err != nil {
-		return err
+	if req.Method == "GET" {
+		exists, err := s.Client.Do("BF.EXISTS", s.getBloomID(), url).Bool()
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
 	}
-	if exists {
-		return nil
-	}
-	_, err = s.Client.TxPipelined(func(pipe redis.Pipeliner) error {
+	_, err := s.Client.TxPipelined(func(pipe redis.Pipeliner) error {
 		pipe.RPush(s.getQueueID(), r)
 		s.Client.Do("BF.ADD", s.getBloomID(), url)
 		return nil
@@ -260,22 +266,26 @@ func (s *TongsStore) Cookies(u *url.URL) string {
 func (s *TongsStore) AddRequest(r []byte) error {
 	var req map[string]interface{}
 	json.Unmarshal(r, &req)
-	url := fmt.Sprintf("%s-%s", req["Method"], req["URL"])
-	exists, err := s.Client.SIsMember(s.getVisitedID(), url).Result()
-	if err != nil {
-		return err
+	var reqId uint64
+	if req["Method"] == "GET" {
+		reqId = requestHash(req["URL"].(string), nil)
+		visited, err := s.IsVisited(reqId)
+		if err != nil {
+			return err
+		}
+		if visited {
+			return nil
+		}
 	}
-	if exists {
-		Log.Debug(fmt.Sprintf("\"%s\"already visited", url))
+
+	_, err := s.Client.TxPipelined(func(pipe redis.Pipeliner) error {
+		pipe.RPush(s.getQueueID(), r)
+		if reqId != 0 {
+			pipe.SAdd(s.getVisitedID(), reqId)
+		}
 		return nil
-	}
-	//_, err = s.Client.TxPipelined(func(pipe redis.Pipeliner) error {
-	//	pipe.RPush(s.getQueueID(), r)
-	//	//pipe.SAdd(s.getVisitedID(), url)
-	//	return nil
-	//})
-	//s.Client.Save()
-	return s.Client.RPush(s.getQueueID(), r).Err()
+	})
+	return err
 }
 
 // GetRequest implements queue.Storage.GetRequest() function
@@ -293,6 +303,7 @@ func (s *TongsStore) GetRequest() ([]byte, error) {
 // QueueSize implements queue.Storage.QueueSize() function
 func (s *TongsStore) QueueSize() (int, error) {
 	i, err := s.Client.LLen(s.getQueueID()).Result()
+
 	return int(i), err
 }
 
@@ -313,4 +324,20 @@ func (s *TongsStore) getVisitedID() string {
 	} else {
 		return fmt.Sprintf("%s:visited", s.TongsName)
 	}
+}
+
+func requestHash(url string, body io.Reader) uint64 {
+	h := fnv.New64a()
+	// reparse the url to fix ambiguities such as
+	// "http://example.com" vs "http://example.com/"
+	parsedWhatwgURL, err := whatwgUrl.Parse(url)
+	if err == nil {
+		h.Write([]byte(parsedWhatwgURL.String()))
+	} else {
+		h.Write([]byte(url))
+	}
+	if body != nil {
+		io.Copy(h, body)
+	}
+	return h.Sum64()
 }

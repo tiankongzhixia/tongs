@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
 	"github.com/gocolly/colly/v2"
 	"github.com/gocolly/colly/v2/queue"
 	whatwgUrl "github.com/nlnwa/whatwg-url/url"
-	"net/url"
 )
 
 var urlParser = whatwgUrl.NewParser(whatwgUrl.WithPercentEncodeSinglePercentSign())
@@ -34,12 +38,13 @@ type Task struct {
 }
 
 func (t *Task) Init() {
-	initStore(t)
 	config := &Config
 	t.AutoUA = config.AutoUa
 	t.AutoDelay = config.AutoDelay
 	t.MaxDepth = config.MaxDepth
 	t.collector.MaxDepth = t.MaxDepth
+	t.Ctx = colly.NewContext()
+	initStore(t)
 	autoUserAgent(t)
 	autoDelay(t)
 }
@@ -78,137 +83,120 @@ func (t *Task) SetCollector(f func(*colly.Collector, *Task)) *Task {
 	return t
 }
 
+func (t *Task) NewRequest(URL string, method string, requestData map[string]interface{}, ctx map[string]interface{}, headers map[string]interface{}) (*colly.Request, error) {
+	u, err := urlParser.Parse(URL)
+	if err != nil {
+		return nil, err
+	}
+	u2, err := url.Parse(u.Href(false))
+	if err != nil {
+		return nil, err
+	}
+	req := &colly.Request{
+		URL:    u2,
+		Method: method,
+		Ctx:    colly.NewContext(),
+	}
+	//设置上下文
+	for k := range ctx {
+		req.Ctx.Put(k, ctx[k])
+	}
+	//设置头部
+	h := http.Header{}
+	if t.collector.Headers != nil {
+		h = t.collector.Headers.Clone()
+	}
+	for k := range headers {
+		h.Set(k, headers[k].(string))
+	}
+	if requestData != nil {
+		bys, _ := json.Marshal(requestData)
+		req.Body = bytes.NewReader(bys)
+		if method == "POST" {
+			h.Set("Content-Type", "application/json;charset=UTF-8")
+		}
+	}
+	req.Headers = &h
+	return req, nil
+}
+
 // AddURL 给当前任务添加url
 func (t *Task) AddURL(URL string) error {
-	if t.IsQueue {
-		if t.Status == Status["running"] {
-			Log.Debug(fmt.Sprintf("队列任务【%s-%s】追加请求: %s", t.tongs.Name, t.Name, URL))
-			t.queue.AddURL(URL)
-		} else {
-			return t.Run(URL)
-		}
-	} else {
-		Log.Debug(fmt.Sprintf("普通任务【%s-%s】追加请求: %s", t.tongs.Name, t.Name, URL))
-		return t.collector.Visit(URL)
+	r, err := t.NewRequest(URL, "GET", nil, nil, nil)
+	if err != nil {
+		return err
 	}
-	return nil
+	return t.AddRequest(r)
 }
 
-func (t *Task) addPostRequest(URL string, requestData map[string]string, ctx map[string]interface{}) error {
-	newCtx := colly.NewContext()
-	if ctx == nil {
-		if t.Ctx != nil {
-			t.Ctx.ForEach(func(k string, v interface{}) interface{} {
-				newCtx.Put(k, v)
-				return nil
-			})
-		}
-	} else {
-		for k := range ctx {
-			newCtx.Put(k, ctx[k])
-		}
+// AddURL 给当前任务添加url
+func (t *Task) AddURLWith(URL string, ctx map[string]interface{}, headers map[string]interface{}) error {
+	r, err := t.NewRequest(URL, "GET", nil, ctx, headers)
+	if err != nil {
+		return err
 	}
-	if t.IsQueue {
-		if t.Status == Status["running"] {
-			u, err := urlParser.Parse(URL)
-			if err != nil {
-				return err
-			}
-			u2, err := url.Parse(u.Href(false))
-			if err != nil {
-				return err
-			}
-			bys, _ := json.Marshal(requestData)
-			r := &colly.Request{
-				URL:     u2,
-				Method:  "POST",
-				Ctx:     newCtx,
-				Headers: nil,
-				Body:    bytes.NewReader(bys),
-			}
-			Log.Debug(fmt.Sprintf("队列任务【%s-%s】追加请求并传递上下文: %s", t.tongs.Name, t.Name, URL))
-			return t.queue.AddRequest(r)
-		} else {
-			return t.Run(URL)
-		}
+	return t.AddRequest(r)
+}
+
+// AddURLToWith 向指定任务添加请求url并追加传递的上下文内容
+func (t *Task) AddURLTo(taskName string, url string) error {
+	if task, err := findTask(t.tongs.Name, taskName); err != nil {
+		return err
 	} else {
-		return t.collector.Post(URL, requestData)
+		return task.AddURLWith(url, nil, nil)
 	}
 }
 
-// 添加请求到colly, 复制当前上下文信息到下一个请求
-func (t *Task) addRequest(URL string, m map[string]interface{}) error {
-	newCtx := colly.NewContext()
-	if m == nil {
-		if t.Ctx != nil {
-			t.Ctx.ForEach(func(k string, v interface{}) interface{} {
-				newCtx.Put(k, v)
-				return nil
-			})
-		}
+// AddURLToWith 向指定任务添加请求url并追加传递的上下文内容
+func (t *Task) AddURLToWith(taskName string, url string, ctx map[string]interface{}) error {
+	if task, err := findTask(t.tongs.Name, taskName); err != nil {
+		return err
 	} else {
-		for k := range m {
-			newCtx.Put(k, m[k])
-		}
+		return task.AddURLWith(url, ctx, nil)
 	}
-	if t.IsQueue {
-		if t.Status == Status["running"] {
-			u, err := urlParser.Parse(URL)
-			if err != nil {
-				return err
-			}
-			u2, err := url.Parse(u.Href(false))
-			if err != nil {
-				return err
-			}
-			r := &colly.Request{
-				URL:    u2,
-				Method: "GET",
-				Ctx:    newCtx,
-			}
-			Log.Debug(fmt.Sprintf("队列任务【%s-%s】追加请求并传递上下文: %s", t.tongs.Name, t.Name, URL))
-			t.queue.AddRequest(r)
-		} else {
-			return t.Run(URL)
-		}
-	} else {
-		return t.collector.Request("GET", URL, nil, newCtx, nil)
-	}
-	return nil
 }
 
 // AddURLToTong 向另外一个tong的task添加url
 func (t *Task) AddURLToTong(tongsName, taskName string, url string) error {
-	if tong, err := findTongs(tongsName); err != nil {
+	if task, err := findTask(tongsName, taskName); err != nil {
 		return err
 	} else {
-		return tong.AddURL(taskName, url)
+		return task.AddURL(url)
 	}
 }
 
 // AddURLToTongWith 向另外一个tong的task添加url并且附带上下文
-func (t *Task) AddURLToTongWith(tongsName, taskName string, url string, m map[string]interface{}) error {
-	if tong, err := findTongs(tongsName); err != nil {
+func (t *Task) AddURLToTongWith(tongsName, taskName string, url string, ctx map[string]interface{}) error {
+	if task, err := findTask(tongsName, taskName); err != nil {
 		return err
-
 	} else {
-		return tong.AddURLWithCtx(taskName, url, m)
+		return task.AddURLWith(url, ctx, nil)
 	}
 }
 
-// AddURLTo 向指定任务添加请求url
-func (t *Task) AddURLTo(taskName string, url string) error {
-	return t.AddURLToWith(taskName, url, nil)
+func (t *Task) AddRequestTo(taskName string, r *colly.Request) error {
+	return t.AddRequestToTong(t.tongs.Name, taskName, r)
 }
 
-// AddURLToWith 向指定任务添加请求url并追加传递的上下文内容
-func (t *Task) AddURLToWith(taskName string, url string, m map[string]interface{}) error {
-	err := t.tongs.AddURLWithCtx(taskName, url, m)
-	return err
+func (t *Task) AddRequestToTong(tongsName string, taskName string, r *colly.Request) error {
+	if task, err := findTask(tongsName, taskName); err != nil {
+		return err
+	} else {
+		return task.AddRequest(r)
+	}
+}
+
+func (t *Task) AddRequest(r *colly.Request) error {
+	Log.Debug(fmt.Sprintf("队列任务【%s-%s】追加请求并传递上下文: %s", t.tongs.Name, t.Name, r.URL.String()))
+	if t.IsQueue {
+		return t.queue.AddRequest(r)
+	} else {
+		return t.collector.Request(r.Method, r.URL.String(), r.Body, r.Ctx, *r.Headers)
+	}
 }
 
 // AddCtx 添加上下文内容
-func (t *Task) AddCtx(key string, value interface{}) {
+func (t *Task) SetCtx(key string, value interface{}) {
 	t.Ctx.Put(key, value)
 }
 
@@ -251,6 +239,7 @@ func (t *Task) Stop() {
 func (t *Task) Save(m map[string]interface{}) error {
 	return t.tongs.Save(m)
 }
+
 func (t *Task) queueRun(url string) error {
 	var startUrl string
 	if url != "" {
@@ -270,11 +259,13 @@ func (t *Task) queueRun(url string) error {
 	go func() {
 		if err := t.queue.Run(t.collector); err != nil {
 			Log.Error(fmt.Sprintf("队列任务【%s-%s】启动失败, err:%s", t.tongs.Name, t.Name, err.Error()))
-			t.Stop()
 		}
+		Log.Info(fmt.Sprintf("队列任务【%s-%s】执行完成", t.tongs.Name, t.Name))
+		defer t.Stop()
 	}()
 	return nil
 }
+
 func (t *Task) collectorRun(url string) error {
 	var startUrl string
 	if url != "" {
@@ -295,4 +286,12 @@ func (t *Task) collectorRun(url string) error {
 		}
 	}()
 	return nil
+}
+
+func createFormReader(data map[string]string) io.Reader {
+	form := url.Values{}
+	for k, v := range data {
+		form.Add(k, v)
+	}
+	return strings.NewReader(form.Encode())
 }

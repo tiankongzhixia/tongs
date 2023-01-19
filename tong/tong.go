@@ -2,8 +2,9 @@ package tong
 
 import (
 	"errors"
-	"github.com/gocolly/colly/v2"
 	"sync"
+
+	"github.com/gocolly/colly/v2"
 )
 
 type Tongs struct {
@@ -84,23 +85,6 @@ func (t *Tongs) StopTask(taskName string) error {
 	} else {
 		task.Stop()
 		return nil
-	}
-}
-
-// AddURL 给指定的任务添加url
-func (t *Tongs) AddURL(taskName string, url string) error {
-	if task, err := t.findTaskWithName(taskName); err != nil {
-		return err
-	} else {
-		return task.AddURL(url)
-	}
-}
-
-func (t *Tongs) AddURLWithCtx(taskName string, url string, m map[string]interface{}) error {
-	if task, err := t.findTaskWithName(taskName); err != nil {
-		return err
-	} else {
-		return task.addRequest(url, m)
 	}
 }
 
